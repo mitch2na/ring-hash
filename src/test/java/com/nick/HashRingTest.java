@@ -88,14 +88,14 @@ public class HashRingTest {
     private void calcStats(HashRing<String, String> hashRing) {
         Map<String, Integer> entries = new HashMap<>();
         TreeSet<HashRing.Entry<HashRing.Node<String, String>>> ringEntries = hashRing.getRingEntries();
-        for (HashRing.Entry<HashRing.Node<String, String>> entry : ringEntries) {
-            HashRing.Node<String, String> ringNode = entry.getData();
-            String node = ringNode.getNode();
+        for (HashRing.Entry<HashRing.Node<String, String>> ringEntry : ringEntries) {
+            HashRing.Node<String, String> vnode = ringEntry.getData();
+            String node = vnode.getNode();
             Integer count = entries.get(node);
             if (count != null) {
-                entries.put(node, count + ringNode.size());
+                entries.put(node, count + vnode.size());
             } else {
-                entries.put(node, ringNode.size());
+                entries.put(node, vnode.size());
             }
         }
         List<Double> numbers = ringEntries.stream().map(HashRing.Entry::getAngle).collect(Collectors.toList());
@@ -110,7 +110,7 @@ public class HashRingTest {
 
     private void printLayout(HashRing<String, String> hashRing) {
         for (HashRing.Entry<?> entry : hashRing.getRingEntries()) {
-            LOGGER.info("Node: " + entry.toString());
+            LOGGER.info("Entry: " + entry.toString());
         }
     }
 
