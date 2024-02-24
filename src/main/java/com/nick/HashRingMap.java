@@ -8,8 +8,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-public class HashRing<K, V> implements Map<K, V> {
-    private static final Logger LOGGER = LoggerFactory.getLogger(HashRing.class);
+public class HashRingMap<K, V> implements Map<K, V> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(HashRingMap.class);
     private static final long POSITIVE_HASH_WINDOW = (long) Integer.MAX_VALUE + (long) Integer.MAX_VALUE + 1L;
     private final Node<K, V> EMPTY_NODE = new Node<>(null, null);
     private final TreeSet<Entry<Node<K, V>>> ringEntries;
@@ -23,7 +23,7 @@ public class HashRing<K, V> implements Map<K, V> {
     private long dataCount;
 
 
-    public HashRing(int nodeSize, int nodeWeight) {
+    public HashRingMap(int nodeSize, int nodeWeight) {
         this.nodeWeight = nodeWeight;
         this.nodeSize = nodeSize;
         this.nodes = new HashMap<>();
@@ -34,12 +34,11 @@ public class HashRing<K, V> implements Map<K, V> {
 
     public void addNode(int nodeSize) {
         List<String> newNodes = IntStream.range(this.nodeSize, this.nodeSize + nodeSize).sequential().mapToObj(it -> "Node " + it).collect(Collectors.toList());
-        this.nodeSize += nodeSize;
         addNewNodes(newNodes);
+
     }
 
     public void addNode(String nodeName) {
-        this.nodeSize += 1;
         addNewNodes(Collections.singletonList(nodeName));
     }
 
@@ -253,6 +252,7 @@ public class HashRing<K, V> implements Map<K, V> {
                 max += startRange;
             }
         }
+        this.nodeSize += newNodes.size();
         LOGGER.info("Moved around " + ((double) moveOperations / (double) dataCount) * 100D + "%");
     }
 
