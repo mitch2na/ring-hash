@@ -1,17 +1,24 @@
 package com.nick;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class HashRing<K, V> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(HashRing.class);
     private static final long POSITIVE_HASH_WINDOW = (long) Integer.MAX_VALUE + (long) Integer.MAX_VALUE + 1L;
-    private final RingNode<K, V> EMPTY_RING_NODE = new RingNode<>("", "");
-    private final TreeSet<RingEntry<RingNode<K, V>>> ringEntries;
+    private final Node<K, V> EMPTY_RING_NODE = new Node<>("", "");
+    private final TreeSet<Entry<Node<K, V>>> ringEntries;
+    /**
+     * node weight to apply (aka how distributed each node will be on the ring)
+     */
     private final int nodeWeight;
 
-    private final Map<String, List<RingEntry<RingNode<K, V>>>> nodes;
+    private final Map<String, List<Entry<Node<K, V>>>> nodes;
     private int nodeSize;
     private long dataCount;
 
@@ -20,12 +27,12 @@ public class HashRing<K, V> {
         this.nodeWeight = nodeWeight;
         this.nodeSize = nodeSize;
         this.nodes = new HashMap<>();
-        List<String> newNodes = IntStream.range(this.nodeSize, nodeSize).sequential().mapToObj(it -> "Node " + it).collect(Collectors.toList());
+        List<String> newNodes = IntStream.range(0, nodeSize).sequential().mapToObj(it -> "Node " + it).collect(Collectors.toList());
         this.ringEntries = createInitialNodes(newNodes);
     }
 
     public void addNode(int nodeSize) {
-        List<String> newNodes = IntStream.range(this.nodeSize, nodeSize).sequential().mapToObj(it -> "Node " + it).collect(Collectors.toList());
+        List<String> newNodes = IntStream.range(this.nodeSize, this.nodeSize + nodeSize).sequential().mapToObj(it -> "Node " + it).collect(Collectors.toList());
         this.nodeSize += nodeSize;
         addNewNodes(newNodes);
     }
@@ -36,20 +43,23 @@ public class HashRing<K, V> {
     }
 
     public void removeNode(String nodeName) {
-        final List<RingEntry<RingNode<K, V>>> nodes = this.nodes.get(nodeName);
-        for (final RingEntry<RingNode<K, V>> node : nodes) {
-            RingEntry<RingNode<K, V>> ringEntryHigher = ringEntries.higher(node);
-            if (ringEntryHigher == null) {
-                ringEntryHigher = ringEntries.first();
+        final List<Entry<Node<K, V>>> nodes = this.nodes.get(nodeName);
+        if (nodes == null) {
+            return;
+        }
+        for (final Entry<Node<K, V>> node : nodes) {
+            Entry<Node<K, V>> entryHigher = ringEntries.higher(node);
+            if (entryHigher == null) {
+                entryHigher = ringEntries.first();
             }
-            RingNode<K, V> ringNode = ringEntryHigher.getData();
-            for (final Map.Entry<K, RingEntry<V>> data : node.getData().getData().entrySet()) {
+            Node<K, V> ringNode = entryHigher.getData();
+            for (final Map.Entry<K, Entry<V>> data : node.getData().getData().entrySet()) {
                 ringNode.put(data.getKey(), data.getValue());
             }
             ringEntries.remove(node);
-            Iterator<Map.Entry<K, RingEntry<V>>> iterator = ringNode.getData().entrySet().iterator();
         }
     }
+
 
     public V put(K key, V value) {
         dataCount += 1;
@@ -62,99 +72,119 @@ public class HashRing<K, V> {
             hashLong = (long) Integer.MAX_VALUE + Math.abs(hash);
 
         double angle = ((double) hashLong / (double) POSITIVE_HASH_WINDOW) * 360D;
-        RingEntry<RingNode<K, V>> ringEntry = ringEntries.higher(new RingEntry<>(hash, angle, EMPTY_RING_NODE));
-        if (ringEntry == null) {
-            ringEntry = ringEntries.first();
+        Entry<Node<K, V>> entry = ringEntries.higher(new Entry<>(hash, angle, EMPTY_RING_NODE));
+        if (entry == null) {
+            entry = ringEntries.first();
         }
         // System.out.println("Node assigned: " + ringEntry.toString());
-        return ringEntry.getData().put(key, new RingEntry<>("Data " + key, hash, angle, value)).getData();
+        Node<K, V> data = entry.getData();
+        Entry<V> put = data.put(key, new Entry<>("Data " + key, hash, angle, value));
+        if (put != null) {
+            return put.getData();
+        }
+        return null;
     }
 
-    private TreeSet<RingEntry<RingNode<K, V>>> createInitialNodes(List<String> newNodes) {
-        TreeSet<RingEntry<RingNode<K, V>>> ringEntries = new TreeSet<>();
+    TreeSet<Entry<Node<K, V>>> getRingEntries() {
+        return this.ringEntries;
+    }
+
+    /**
+     * Create the initial nodes into the hash ring. Takes the weight and randomly assigns each vnode with a window range
+     * throughout the circle.
+     *
+     * @param newNodes - actual nodes in the cluster
+     */
+    private TreeSet<Entry<Node<K, V>>> createInitialNodes(List<String> newNodes) {
+        TreeSet<Entry<Node<K, V>>> ringEntries = new TreeSet<>();
         double incrementBy = 360D / (double) nodeWeight;
         for (String node : newNodes) {
-            String nodeName = "Node" + node;
-            List<RingEntry<RingNode<K, V>>> nodeWeights = new LinkedList<>();
-            this.nodes.put(nodeName, nodeWeights);
+            List<Entry<Node<K, V>>> nodeWeights = new LinkedList<>();
+            this.nodes.put(node, nodeWeights);
             double max = incrementBy;
             for (int j = 0; j < nodeWeight; j++) {
-                String nodeNameWeight = nodeName + j;
+                String nodeNameWeight = node + "-" + j;
                 double min = (max - incrementBy);
-                RingEntry<RingNode<K, V>> nodeRingEntry = createNodeRingEntry(ringEntries, nodeName, max, min, nodeNameWeight);
-                ringEntries.add(nodeRingEntry);
-                nodeWeights.add(nodeRingEntry);
+                Entry<Node<K, V>> nodeEntry = createNodeRingEntry(ringEntries, node, max, min, nodeNameWeight);
+                ringEntries.add(nodeEntry);
+                nodeWeights.add(nodeEntry);
                 max += incrementBy;
             }
         }
         return ringEntries;
     }
 
-    private RingEntry<RingNode<K, V>> createNodeRingEntry(TreeSet<RingEntry<RingNode<K, V>>> ringEntries, String nodeName,
-                                                          double max, double min, String nodeNameWeight) {
-        RingEntry<RingNode<K, V>> vnodeEntry;
+    private Entry<Node<K, V>> createNodeRingEntry(TreeSet<Entry<Node<K, V>>> ringEntries, String nodeName,
+                                                  double max, double min, String nodeNameWeight) {
+        Entry<Node<K, V>> vnodeEntry;
         double angle = -1;
         do {
             if (angle != -1) {
-                System.out.println("Clash with angle " + angle + ", trying again.");
+                LOGGER.warn("Clash with angle " + angle + ", trying again.");
             }
             angle = ThreadLocalRandom.current().nextDouble(min, max);
-            vnodeEntry = new RingEntry<>(nodeNameWeight, UUID.randomUUID().toString().hashCode(), angle,
-                    new RingNode<>(nodeName, nodeNameWeight));
+            vnodeEntry = new Entry<>(nodeNameWeight, UUID.randomUUID().toString().hashCode(), angle,
+                    new Node<>(nodeName, nodeNameWeight));
         } while (ringEntries.contains(vnodeEntry));
         return vnodeEntry;
     }
 
+    /**
+     * This is the beauty of the hash ring! You dont need to adjust all the vnodes since each new vnode will only
+     * take the entries from next highest vnode that is less than or equal to itself.
+     *
+     * @param newNodes - new node names
+     */
     private void addNewNodes(List<String> newNodes) {
         int moveOperations = 0;
         double startRange = 360D / (double) nodeWeight;
         for (String nodeName : newNodes) {
-            List<RingEntry<RingNode<K, V>>> nodeWeights = new LinkedList<>();
+            List<Entry<Node<K, V>>> nodeWeights = new LinkedList<>();
             this.nodes.put(nodeName, nodeWeights);
             double max = startRange;
             for (int j = 0; j < nodeWeight; j++) {
-                String nodeNameWeight = nodeName + j;
+                String nodeNameWeight = nodeName + "-" + j;
                 double min = (max - startRange);
-                RingEntry<RingNode<K, V>> nodeRingEntry = createNodeRingEntry(ringEntries, nodeName, max, min, nodeNameWeight);
-                RingEntry<RingNode<K, V>> ringEntryHigher = ringEntries.higher(nodeRingEntry);
+                Entry<Node<K, V>> nodeEntry = createNodeRingEntry(ringEntries, nodeName, max, min, nodeNameWeight);
+                Entry<Node<K, V>> ringEntryHigher = ringEntries.higher(nodeEntry);
                 boolean isFirst = false;
                 if (ringEntryHigher == null) {
                     ringEntryHigher = ringEntries.first();
                 } else {
                     isFirst = ringEntryHigher.getAngle() == ringEntries.first().getAngle();
                 }
-                RingNode<K, V> ringNode = ringEntryHigher.getData();
+                Node<K, V> node = ringEntryHigher.getData();
                 /*
                  * TODO: this portion can be optimized further since its using a linked list we dont keep order of the data entries.
                  *  Faster retrieval could be used by using a binary search for this current vnode's angle
                  *  and every data entry below it.
                  */
-                Iterator<Map.Entry<K, RingEntry<V>>> iterator = ringNode.getData().entrySet().iterator();
+                Iterator<Map.Entry<K, Entry<V>>> iterator = node.getData().entrySet().iterator();
                 while (iterator.hasNext()) {
-                    Map.Entry<K, RingEntry<V>> ringEntry = iterator.next();
-                    double nodeAngle = nodeRingEntry.getAngle();
+                    Map.Entry<K, Entry<V>> ringEntry = iterator.next();
+                    double nodeAngle = nodeEntry.getAngle();
                     double entryAngle = ringEntry.getValue().getAngle();
                     if (nodeAngle >= entryAngle ||
                             (isFirst && entryAngle > ringEntryHigher.getAngle())) {
                         moveOperations = moveOperations + 1;
-                        nodeRingEntry.getData().put(ringEntry.getKey(), ringEntry.getValue());
+                        nodeEntry.getData().put(ringEntry.getKey(), ringEntry.getValue());
                         iterator.remove();
                     }
                 }
-                ringEntries.add(nodeRingEntry);
-                nodeWeights.add(nodeRingEntry);
+                ringEntries.add(nodeEntry);
+                nodeWeights.add(nodeEntry);
                 max += startRange;
             }
         }
-        System.out.println("Moved around " + ((double) moveOperations / (double) dataCount) * 100D + "%");
+        LOGGER.info("Moved around " + ((double) moveOperations / (double) dataCount) * 100D + "%");
     }
 
-    static class RingNode<K, V> {
+    static class Node<K, V> {
         private final String node;
         private final String name;
-        private final Map<K, RingEntry<V>> data = new HashMap<>();
+        private final Map<K, Entry<V>> data = new HashMap<>();
 
-        private RingNode(String node, String name) {
+        private Node(String node, String name) {
             this.node = node;
             this.name = name;
         }
@@ -167,11 +197,11 @@ public class HashRing<K, V> {
             return name;
         }
 
-        public Map<K, RingEntry<V>> getData() {
+        public Map<K, Entry<V>> getData() {
             return data;
         }
 
-        public RingEntry<V> put(K key, RingEntry<V> data) {
+        public Entry<V> put(K key, Entry<V> data) {
             return this.data.put(key, data);
         }
 
@@ -186,20 +216,20 @@ public class HashRing<K, V> {
     }
 
 
-    static class RingEntry<V> implements Comparable<RingEntry<V>> {
+    static class Entry<V> implements Comparable<Entry<V>> {
         private final String name;
         private final int hash;
         private final double angle;
         private final V data;
 
-        public RingEntry(String name, int hash, double angle, V data) {
+        public Entry(String name, int hash, double angle, V data) {
             this.name = name;
             this.hash = hash;
             this.angle = angle;
             this.data = data;
         }
 
-        public RingEntry(int hash, double angle, V data) {
+        public Entry(int hash, double angle, V data) {
             this(null, hash, angle, data);
         }
 
@@ -227,7 +257,7 @@ public class HashRing<K, V> {
         }
 
         @Override
-        public int compareTo(RingEntry o) {
+        public int compareTo(Entry o) {
             return Double.compare(this.angle, o.getAngle());
         }
 
@@ -235,8 +265,8 @@ public class HashRing<K, V> {
         public boolean equals(Object o) {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
-            RingEntry<?> ringEntry = (RingEntry<?>) o;
-            return Double.compare(angle, ringEntry.angle) == 0;
+            Entry<?> entry = (Entry<?>) o;
+            return Double.compare(angle, entry.angle) == 0;
         }
 
         @Override
